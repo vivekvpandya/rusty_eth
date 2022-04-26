@@ -14,7 +14,7 @@ use web3::{
 #[clap(author, version, about, long_about = None)]
 struct Args {
     // address of interest
-    #[clap(short, long, default_value_t = String::from("6f140f64FC13482F2209eB1cCF9c2bf633409B78"))]
+    #[clap(short, long, default_value_t = String::from("f24c609e942a65efa7f745f75c16a7a7d8d04834"))]
     address: String,
     // starting blocknumber
     #[clap(short, long, default_value_t = 0)]
@@ -33,6 +33,8 @@ struct Args {
     timestamp: Option<String>,
 }
 
+//TODO: Add unit tests for this function.
+// This function does not return block_number with high accuracy.
 async fn timestamp_to_block<T: Transport>(web3: web3::Web3<T>, timestamp: String) -> u64 {
     let timestamp: u64 = DateTime::parse_from_rfc2822(&timestamp)
         .expect("timestamp parsing failed")
@@ -72,6 +74,7 @@ async fn timestamp_to_block<T: Transport>(web3: web3::Web3<T>, timestamp: String
 }
 
 #[tokio::main]
+//TODO: breakdown main's code into small functions
 async fn main() -> web3::contract::Result<()> {
     let args = Args::parse();
     let transport = web3::transports::Http::new(
@@ -97,16 +100,16 @@ async fn main() -> web3::contract::Result<()> {
     if step < 1 {
         step = 1;
     }
+    // get balance of ETH
     if args.erc_20_token_address.is_none() {
         println!("Calling balance.");
         for account in accounts {
             let mut futures = Vec::new();
             let mut blocks = Vec::new();
             for block in (start_block..=end_block).step_by(step as usize) {
-                let balance = web3.eth().balance(
-                    account,
-                    /*None*/ Some(BlockNumber::Number(block.into())),
-                );
+                let balance = web3
+                    .eth()
+                    .balance(account, Some(BlockNumber::Number(block.into())));
                 futures.push(balance);
                 blocks.push(block as f32);
             }
@@ -135,6 +138,7 @@ async fn main() -> web3::contract::Result<()> {
             );
         }
     } else {
+        // get balance of ERC20 tokens
         if args.erc_20_token_abi.is_none() {
             println!("Please provide erc_20_token_abi");
             return Ok(());
