@@ -1,4 +1,5 @@
 extern crate rasciigraph;
+use chrono::DateTime;
 use clap::Parser;
 use rasciigraph::{plot, Config};
 use std::str::FromStr;
@@ -6,6 +7,7 @@ use web3::{
     contract::{Contract, Options},
     futures::future::try_join_all,
     types::{BlockNumber, U256},
+    Transport,
 };
 
 #[derive(Parser, Debug)]
@@ -26,6 +28,47 @@ struct Args {
     // path of JSON file containing ABI for ERC20 token
     #[clap(long)]
     erc_20_token_abi: Option<String>,
+    // timestamp in RFC2822 format at which balance is reuqired to be found
+    #[clap(short, long)]
+    timestamp: Option<String>,
+}
+
+async fn timestamp_to_block<T: Transport>(web3: web3::Web3<T>, timestamp: String) -> u64 {
+    let timestamp: u64 = DateTime::parse_from_rfc2822(&timestamp)
+        .expect("timestamp parsing failed")
+        .timestamp()
+        .try_into()
+        .expect("error creating timestamp");
+    let timestamp: U256 = timestamp.into();
+
+    let average_block_time = U256::from(14_u64);
+    let mut current_block_number = web3
+        .eth()
+        .block_number()
+        .await
+        .expect("get current block number failed");
+    let mut current_block = web3
+        .eth()
+        .block(current_block_number.into())
+        .await
+        .expect("get current block failed")
+        .unwrap();
+    while current_block.timestamp > timestamp.into() {
+        let decrease_block = (current_block.timestamp - timestamp) / average_block_time;
+        let decrease_block_int = decrease_block.low_u64() as u64;
+        if decrease_block_int < 1_u64 {
+            break;
+        }
+        current_block_number -= decrease_block_int.into();
+        current_block = web3
+            .eth()
+            .block(current_block_number.into())
+            .await
+            .expect("get current block failed")
+            .unwrap();
+    }
+
+    current_block_number.low_u64().into()
 }
 
 #[tokio::main]
@@ -41,8 +84,15 @@ async fn main() -> web3::contract::Result<()> {
     accounts.push(
         web3::types::Address::from_str(&args.address).expect("string to address conversion failed"),
     );
-    let sample_counts = 20;
-    let step = (args.end_block_number - args.start_block_number) as f64 / sample_counts as f64;
+    let mut sample_counts = 20;
+    let mut start_block = args.start_block_number;
+    let mut end_block = args.end_block_number;
+    if let Some(timestamp) = args.timestamp {
+        start_block = timestamp_to_block(web3.clone(), timestamp).await;
+        end_block = start_block;
+        sample_counts = 1; // just for printing purpose
+    }
+    let step = (end_block - start_block) as f64 / sample_counts as f64;
     let mut step = step.floor() as u64;
     if step < 1 {
         step = 1;
@@ -52,7 +102,7 @@ async fn main() -> web3::contract::Result<()> {
         for account in accounts {
             let mut futures = Vec::new();
             let mut blocks = Vec::new();
-            for block in (args.start_block_number..=args.end_block_number).step_by(step as usize) {
+            for block in (start_block..=end_block).step_by(step as usize) {
                 let balance = web3.eth().balance(
                     account,
                     /*None*/ Some(BlockNumber::Number(block.into())),
@@ -98,7 +148,7 @@ async fn main() -> web3::contract::Result<()> {
         for account in accounts {
             let mut futures = Vec::new();
             let mut blocks = Vec::new();
-            for block in (args.start_block_number..=args.end_block_number).step_by(step as usize) {
+            for block in (start_block..=end_block).step_by(step as usize) {
                 let balance = contract.query(
                     "balanceOf",
                     (account,),
